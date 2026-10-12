@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Glyph Countdown Toy"
+rootProject.name = "Glyph Cake Wait"
 include(":app")
