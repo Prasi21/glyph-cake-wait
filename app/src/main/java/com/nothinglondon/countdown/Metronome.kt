@@ -57,6 +57,7 @@ class Metronome(bpm: Double, subdivisionsPerBeat: Int) {
     fun start() {
         try {
             track.flush()
+            track.setVolume(1f)
             feeding = true
             track.play()
             feeder = Thread {
@@ -114,6 +115,10 @@ class Metronome(bpm: Double, subdivisionsPerBeat: Int) {
             track.stop()
         } catch (_: Throwable) {
         }
+    }
+
+    fun setVolume(volume: Float) {
+        runCatching { track.setVolume(volume.coerceIn(0f, 1f)) }
     }
 
     fun release() {

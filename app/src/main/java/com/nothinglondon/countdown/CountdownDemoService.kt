@@ -84,7 +84,9 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
             while (isActive) {
                 val elapsed = metro.elapsedSeconds()
                 val remaining = READY_VALUE - elapsed
-                render(ceil(remaining).toInt().toString(), fadeBrightness(remaining))
+                val fade = fadeProgress(remaining)
+                metro.setVolume(fade.toFloat())
+                render(ceil(remaining).toInt().toString(), (MAX_BRIGHTNESS * fade).toInt())
                 delay(FRAME_INTERVAL_MS)
             }
         }
@@ -112,11 +114,8 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
         }
     }
 
-    private fun fadeBrightness(value: Double): Int {
-        val progress = ((value - FADE_OUT_VALUE) / (READY_VALUE - FADE_OUT_VALUE))
-            .coerceIn(0.0, 1.0)
-        return (MAX_BRIGHTNESS * progress).toInt()
-    }
+    private fun fadeProgress(value: Double): Double =
+        ((value - FADE_OUT_VALUE) / (READY_VALUE - FADE_OUT_VALUE)).coerceIn(0.0, 1.0)
 
     private fun renderSprite() {
         val manager = glyphMatrixManager ?: return
