@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Glyph Matrix Sprite Editor (25x25)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background:#111; color:#eee;
+         display:flex; gap:24px; padding:20px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0 0 4px; }
+  .panel { background:#1b1b1b; border:1px solid #333; border-radius:10px; padding:14px; }
+  canvas { image-rendering: pixelated; display:block; touch-action:none; }
+  #grid { background:#000; cursor:crosshair; }
+  .row { display:flex; align-items:center; gap:8px; margin:8px 0; }
+  .row label { min-width:120px; color:#bbb; }
+  input[type=range] { flex:1; }
+  button { background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:6px;
+           padding:6px 10px; cursor:pointer; }
+  button:hover { background:#333; }
+  button.on { background:#3a6; border-color:#3a6; color:#031; font-weight:600; }
+  .muted { color:#888; font-size:12px; }
+  textarea { width:100%; height:90px; background:#0d0d0d; color:#9f9; border:1px solid #333;
+             border-radius:6px; font:12px/1.3 ui-monospace, monospace; }
+  .swatch { width:22px; height:22px; border:1px solid #555; border-radius:4px; }
+  code { background:#222; padding:1px 4px; border-radius:4px; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h1>Glyph Matrix Sprite Editor</h1>
+  <div class="muted">25&times;25 &middot; left-drag paint &middot; right-drag erase</div>
+  <canvas id="grid" width="450" height="450"></canvas>
+  <div class="row">
+    <label>Brightness</label>
+    <input id="brightness" type="range" min="1" max="255" value="255" />
+    <span id="brightnessVal" class="muted">255</span>
+    <span id="swatch" class="swatch" style="background:#fff"></span>
+  </div>
+  <div class="row">
+    <button id="eraser">Eraser</button>
+    <button id="clear">Clear</button>
+    <button id="invert">Invert</button>
+    <button id="fill" class="on">Clip to circle</button>
+    <button id="mask" class="on">Show mask</button>
+  </div>
+  <div class="muted">Live LEDs inside circle: <b id="liveCount">0</b> / 625</div>
+</div>
+
+<div class="panel">
+  <h1>Phone preview</h1>
+  <div class="muted">Approximate round-LED look</div>
+  <canvas id="preview" width="300" height="300"></canvas>
+</div>
+
+<div class="panel" style="max-width:520px">
+  <h1>Export into the app</h1>
+  <div class="row">
+    <button id="copyKt">Copy Kotlin array</button>
+    <button id="dlKt">Download .kt</button>
+    <button id="dlPng">Download PNG</button>
+    <button id="dlPngHd">Download PNG &times;8</button>
+  </div>
+  <div class="muted">Paste into <code>Sprites.kt</code> as <code>READY_SPRITE</code></div>
+  <textarea id="out" readonly></textarea>
+</div>
+
+<script>
+const N = 25, CELL = 18;
+const grid = new Uint8Array(N*N);           // 0..255 brightness per cell
+const cx = N/2, cy = N/2, rIn = 12.6;       // circle centred, radius = half canvas
+const live = i => { const x = i % N + 0.5, y = (i / N | 0) + 0.5;
+                    return Math.hypot(x - cx, y - cy) <= rIn; };
+
+const gcanvas = document.getElementById('grid');
+const gctx = gcanvas.getContext('2d');
+const pcanvas = document.getElementById('preview');
+const pctx = pcanvas.getContext('2d');
+const out = document.getElementById('out');
+
+let brush = 255, erasing = false, clip = true, showMask = true;
+
+function liveCount() { let c = 0; for (let i=0;i<N*N;i++) if (live(i)) c++; return c; }
+document.getElementById('liveCount').textContent = liveCount();
+
+function draw() {
+  gctx.clearRect(0,0,450,450);
+  for (let i=0;i<N*N;i++) {
+    const v = grid[i], x = (i%N)*CELL, y = (i/N|0)*CELL;
+    gctx.fillStyle = v ? `rgb(${v},${v},${v})` : '#000';
+    gctx.fillRect(x,y,CELL,CELL);
+  }
+  gctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  for (let k=0;k<=N;k++){ gctx.beginPath(); gctx.moveTo(k*CELL,0); gctx.lineTo(k*CELL,450);
+    gctx.moveTo(0,k*CELL); gctx.lineTo(450,k*CELL); gctx.stroke(); }
+  if (showMask) {
+    gctx.save();
+    gctx.beginPath(); gctx.rect(0,0,450,450);
+    gctx.arc(cx*CELL, cy*CELL, rIn*CELL, 0, Math.PI*2, true);
+    gctx.fillStyle = 'rgba(0,0,0,0.55)'; gctx.fill('evenodd');
+    gctx.restore();
+    gctx.beginPath(); gctx.arc(cx*CELL, cy*CELL, rIn*CELL, 0, Math.PI*2);
+    gctx.strokeStyle = 'rgba(120,200,255,0.5)'; gctx.lineWidth = 1.5; gctx.stroke();
+  }
+  drawPreview();
+  out.value = kotlinSource().slice(0, 400) + '\n...';
+}
+
+function drawPreview() {
+  const S = 300, R = S/N;
+  pctx.fillStyle = '#000'; pctx.fillRect(0,0,S,S);
+  for (let i=0;i<N*N;i++) {
+    const v = grid[i]; if (!v) continue;
+    const x = i%N + 0.5, y = (i/N|0) + 0.5;
+    pctx.beginPath(); pctx.arc(x*R, y*R, R*0.34, 0, Math.PI*2);
+    pctx.fillStyle = `rgba(255,255,255,${(v/255).toFixed(3)})`; pctx.fill();
+  }
+}
+
+function cellFrom(ev) {
+  const r = gcanvas.getBoundingClientRect();
+  const x = Math.floor((ev.clientX - r.left) / (r.width/N));
+  const y = Math.floor((ev.clientY - r.top) / (r.height/N));
+  if (x<0||y<0||x>=N||y>=N) return -1;
+  return y*N + x;
+}
+
+let painting = false;
+gcanvas.addEventListener('contextmenu', e => e.preventDefault());
+gcanvas.addEventListener('pointerdown', e => {
+  painting = true; gcanvas.setPointerCapture(e.pointerId);
+  erasing = e.button === 2;
+  paintAt(e);
+});
+gcanvas.addEventListener('pointermove', e => { if (painting) paintAt(e); });
+gcanvas.addEventListener('pointerup', () => { painting = false; erasing = false; });
+
+function paintAt(e) {
+  const i = cellFrom(e); if (i < 0) return;
+  if (clip && !live(i)) return;
+  grid[i] = erasing ? 0 : brush;
+  draw();
+}
+
+document.getElementById('brightness').addEventListener('input', e => {
+  brush = +e.target.value;
+  document.getElementById('brightnessVal').textContent = brush;
+  const s = document.getElementById('swatch'); s.style.background = `rgb(${brush},${brush},${brush})`;
+});
+document.getElementById('eraser').addEventListener('click', e => {
+  brush = 0;
+  document.getElementById('brightness').value = 0;
+  document.getElementById('brightnessVal').textContent = 0;
+  document.getElementById('swatch').style.background = '#000';
+});
+document.getElementById('clear').addEventListener('click', () => { grid.fill(0); draw(); });
+document.getElementById('invert').addEventListener('click', () => {
+  for (let i=0;i<N*N;i++) if (!clip || live(i)) grid[i] = grid[i] ? 0 : 255; draw();
+});
+document.getElementById('fill').addEventListener('click', e => {
+  clip = !clip; e.target.classList.toggle('on', clip);
+});
+document.getElementById('mask').addEventListener('click', e => {
+  showMask = !showMask; e.target.classList.toggle('on', showMask); draw();
+});
+
+function kotlinSource() {
+  const lines = [];
+  for (let y=0;y<N;y++) {
+    const row = [];
+    for (let x=0;x<N;x++) row.push(String(grid[y*N+x]).padStart(3, ' '));
+    lines.push('    ' + row.join(', ') + ',');
+  }
+  return '// 25x25 grayscale, row-major (0..255). Ready-state logo.\n' +
+         'val READY_SPRITE: IntArray = intArrayOf(\n' + lines.join('\n') + '\n)\n';
+}
+function download(name, blob) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+document.getElementById('copyKt').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(kotlinSource());
+  out.value = kotlinSource();
+});
+document.getElementById('dlKt').addEventListener('click', () =>
+  download('Sprites.kt', new Blob([kotlinSource()], {type:'text/plain'})));
+function pngBlob(scale) {
+  const c = document.createElement('canvas'); c.width = c.height = N*scale;
+  const ctx = c.getContext('2d');
+  for (let i=0;i<N*N;i++) {
+    const v = grid[i]; if (!v) continue;
+    ctx.fillStyle = `rgba(255,255,255,${(v/255).toFixed(3)})`;
+    ctx.fillRect((i%N)*scale, (i/N|0)*scale, scale, scale);
+  }
+  return new Promise(res => c.toBlob(res, 'image/png'));
+}
+document.getElementById('dlPng').addEventListener('click', async () =>
+  download('ready_sprite.png', await pngBlob(1)));
+document.getElementById('dlPngHd').addEventListener('click', async () =>
+  download('ready_sprite@8x.png', await pngBlob(8)));
+
+draw();
+</script>
+</body>
+</html>

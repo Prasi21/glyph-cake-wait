@@ -21,8 +21,6 @@ class Metronome(bpm: Double, subdivisionsPerBeat: Int) {
 
     @Volatile
     private var feeding = false
-    @Volatile
-    private var timestampLogged = false
     private var feeder: Thread? = null
 
     init {
@@ -92,10 +90,6 @@ class Metronome(bpm: Double, subdivisionsPerBeat: Int) {
     private fun audibleFrames(): Long {
         val timestamp = AudioTimestamp()
         if (track.getTimestamp(timestamp)) {
-            if (!timestampLogged) {
-                timestampLogged = true
-                Log.d(TAG, "presentation timestamp available (frame=${timestamp.framePosition})")
-            }
             val nanosSincePresented = System.nanoTime() - timestamp.nanoTime
             return timestamp.framePosition + nanosSincePresented * SAMPLE_RATE / NANOS_PER_SECOND
         }
@@ -107,7 +101,8 @@ class Metronome(bpm: Double, subdivisionsPerBeat: Int) {
     fun stop() {
         feeding = false
         try {
-            track.stop()
+            track.pause()
+            track.flush()
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to stop metronome", t)
         }
@@ -115,6 +110,10 @@ class Metronome(bpm: Double, subdivisionsPerBeat: Int) {
             runCatching { thread.join(FEEDER_JOIN_MS) }
         }
         feeder = null
+        try {
+            track.stop()
+        } catch (_: Throwable) {
+        }
     }
 
     fun release() {

@@ -1,6 +1,8 @@
 package com.nothinglondon.countdown
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.util.Log
 import com.nothing.ketchum.GlyphMatrixFrame
 import com.nothing.ketchum.GlyphMatrixManager
@@ -12,7 +14,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.floor
+import kotlin.math.ceil
 
 class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
 
@@ -21,6 +23,7 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
     private var running = false
     private var suppressChange = false
     private var metronome: Metronome? = null
+    private var flashJob: Job? = null
 
     override fun performOnServiceConnected(
         context: Context,
@@ -33,12 +36,14 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
         } catch (t: Throwable) {
             Log.w(TAG, "Unable to disable glyph matrix timeout", t)
         }
-        render(READY_VALUE, MAX_BRIGHTNESS)
+        renderSprite()
     }
 
     override fun performOnServiceDisconnected(context: Context) {
         runJob?.cancel()
         runJob = null
+        flashJob?.cancel()
+        flashJob = null
         running = false
         suppressChange = false
         metronome?.release()
@@ -69,27 +74,17 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
     }
 
     private fun startTimer() {
+        flashJob?.cancel()
+        flashJob = null
         runJob?.cancel()
         running = true
         runJob = bgScope.launch {
             val metro = metronome ?: return@launch
-            val startWallNanos = System.nanoTime()
             metro.start()
-            var startLogged = false
-            var lastWholeSecond = -1
             while (isActive) {
                 val elapsed = metro.elapsedSeconds()
-                if (!startLogged && elapsed > 0.0) {
-                    probeStart(startWallNanos)
-                    startLogged = true
-                }
-                val wholeSecond = floor(elapsed).toInt()
-                if (wholeSecond != lastWholeSecond) {
-                    probeBeat(wholeSecond, elapsed)
-                    lastWholeSecond = wholeSecond
-                }
                 val remaining = READY_VALUE - elapsed
-                render(remaining, fadeBrightness(remaining))
+                render(ceil(remaining).toInt().toString(), fadeBrightness(remaining))
                 delay(FRAME_INTERVAL_MS)
             }
         }
@@ -101,7 +96,20 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
         runJob = null
         running = false
         metronome?.stop()
-        render(READY_VALUE - elapsed, MAX_BRIGHTNESS)
+        flashScore("%+.2f".format(READY_VALUE - elapsed))
+    }
+
+    private fun flashScore(score: String) {
+        flashJob?.cancel()
+        flashJob = bgScope.launch {
+            repeat(FLASH_COUNT) {
+                render(score, MAX_BRIGHTNESS)
+                delay(FLASH_ON_MS)
+                render(score, 0)
+                delay(FLASH_OFF_MS)
+            }
+            render(score, MAX_BRIGHTNESS)
+        }
     }
 
     private fun fadeBrightness(value: Double): Int {
@@ -110,11 +118,48 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
         return (MAX_BRIGHTNESS * progress).toInt()
     }
 
-    private fun render(value: Double, brightness: Int) {
+    private fun renderSprite() {
+        val manager = glyphMatrixManager ?: return
+        val pixels = IntArray(MATRIX_SIZE * MATRIX_SIZE) { i ->
+            val g = READY_SPRITE[i].coerceIn(0, 255)
+            Color.rgb(g, g, g)
+        }
+        val bitmap = Bitmap.createBitmap(MATRIX_SIZE, MATRIX_SIZE, Bitmap.Config.ARGB_8888)
+        bitmap.setPixels(pixels, 0, MATRIX_SIZE, 0, 0, MATRIX_SIZE, MATRIX_SIZE)
+        val sprite = GlyphMatrixObject.Builder()
+            .setImageSource(bitmap)
+            .setBrightness(MAX_BRIGHTNESS)
+            .build()
+        val frame = GlyphMatrixFrame.Builder()
+            .addTop(sprite)
+            .build(applicationContext)
+        try {
+            manager.setMatrixFrame(frame.render())
+        } catch (t: Throwable) {
+            Log.w(TAG, "Unable to render sprite", t)
+        }
+    }
+
+    private fun centerX(text: String): Int {
+        var width = 0
+        text.forEachIndexed { index, c ->
+            if (index > 0) width += LETTER_SPACING
+            width += when (c) {
+                '1' -> 3
+                '.' -> 1
+                '+' -> 5
+                '-' -> 3
+                else -> 4
+            }
+        }
+        return (MATRIX_SIZE - width) / 2
+    }
+
+    private fun render(text: String, brightness: Int) {
         val manager = glyphMatrixManager ?: return
         val textObject = GlyphMatrixObject.Builder()
-            .setText("%.2f".format(value))
-            .setPosition(TEXT_POSITION_X, TEXT_POSITION_Y)
+            .setText(text)
+            .setPosition(centerX(text), TEXT_POSITION_Y)
             .setBrightness(brightness)
             .build()
         val frame = GlyphMatrixFrame.Builder()
@@ -127,35 +172,19 @@ class CountdownDemoService : GlyphMatrixService("Countdown-Demo") {
         }
     }
 
-    private fun probeStart(startWallNanos: Long) {
-        if (!VERIFY_TIMING) return
-        val latencyMs = (System.nanoTime() - startWallNanos) / 1_000_000.0
-        Log.d(PROBE_TAG, "audio output started ${"%.1f".format(latencyMs)} ms after trigger")
-    }
-
-    private fun probeBeat(beatIndex: Int, elapsed: Double) {
-        if (!VERIFY_TIMING) return
-        val idealMs = beatIndex * BEAT_INTERVAL_SECONDS * 1000
-        val actualMs = elapsed * 1000
-        Log.d(
-            PROBE_TAG,
-            "beat=$beatIndex ideal=${"%.1f".format(idealMs)}ms audio=${"%.1f".format(actualMs)}ms delta=${"%.1f".format(actualMs - idealMs)}ms"
-        )
-    }
-
     private companion object {
         private val TAG = CountdownDemoService::class.java.simpleName
-        private const val PROBE_TAG = "CountdownTiming"
-        private const val VERIFY_TIMING = true
-
         private const val READY_VALUE = 10.0
         private const val FADE_OUT_VALUE = 6.0
         private const val MAX_BRIGHTNESS = 255
         private const val BPM = 60.0
         private const val SUBDIVISIONS_PER_BEAT = 2
-        private const val BEAT_INTERVAL_SECONDS = 60.0 / BPM
         private const val FRAME_INTERVAL_MS = 16L
-        private const val TEXT_POSITION_X = 3
+        private const val FLASH_COUNT = 6
+        private const val FLASH_ON_MS = 140L
+        private const val FLASH_OFF_MS = 90L
+        private const val MATRIX_SIZE = 25
+        private const val LETTER_SPACING = 1
         private const val TEXT_POSITION_Y = 10
     }
 }

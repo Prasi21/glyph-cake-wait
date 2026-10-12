@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Glyph Countdown</string>
-    <string name="toy_name_countdown">Countdown</string>
-    <string name="toy_summary_countdown">Long press to start; touch down again to stop.</string>
+    <string name="toy_name_countdown">Cake Wait</string>
+    <string name="toy_summary_countdown">Cake time in 10 seconds! Stop it on 0.</string>
 </resources>
